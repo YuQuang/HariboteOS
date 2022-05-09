@@ -60,3 +60,74 @@ void inthandler27(int *esp)
 	io_out8(PIC0_OCW2, 0x67); /* 通知PIC的IRQ-07（参考7-1） */
 	return;
 }
+
+// 等待鍵盤控制器處理
+void wait_KBC_sendready(void)
+{
+	/* 等待键盘控制电路准备完毕 */
+	for (;;) {
+		if ((io_in8(PORT_KEYSTA) & KEYSTA_SEND_NOTREADY) == 0) {
+			break;
+		}
+	}
+	return;
+}
+
+// 初始化鍵盤控制器
+void init_keyboard(void)
+{
+	wait_KBC_sendready();
+	io_out8(PORT_KEYCMD, KEYCMD_WRITE_MODE);
+	wait_KBC_sendready();
+	io_out8(PORT_KEYDAT, KBC_MODE);
+	return;
+}
+
+void enable_mouse(struct MOUSE_DEC *mdec)
+{
+	wait_KBC_sendready();
+	io_out8(PORT_KEYCMD, KEYCMD_SENDTO_MOUSE);
+	wait_KBC_sendready();
+	io_out8(PORT_KEYDAT, MOUSECMD_ENABLE);
+	mdec->phase = 0;
+	return;	// 順利的話 鍵盤控制器會返回 ACK (0xfa)
+}
+
+int mouse_decode(struct MOUSE_DEC *mdec, unsigned char i)
+{
+	switch (mdec->phase)
+	{
+		case 0:
+			if(i == 0xfa) mdec->phase = 1;
+			return 0;
+		case 1:
+			if((i & 0xc8) == 0x08){
+				mdec->buf[0] = i;
+				mdec->phase = 2;
+			}
+			return 0;
+		case 2:
+			mdec->buf[1] = i;
+			mdec->phase = 3;
+			return 0;
+		case 3:
+			mdec->buf[2] = i;
+			mdec->phase = 1;
+			mdec->btn = mdec->buf[0] & 0x07;
+			mdec->x = mdec->buf[1];
+			mdec->y = mdec->buf[2];
+
+			if((mdec->buf[0] & 0x10) != 0){
+				mdec->x |= 0xffffff00;
+			}
+			if((mdec->buf[0] & 0x20) != 0){
+				mdec->y |= 0xffffff00;
+			}
+
+			mdec->y = -mdec->y;
+
+			return 1;
+		default: break;
+	}
+	return -1;
+}
